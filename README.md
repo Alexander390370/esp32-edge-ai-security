@@ -163,6 +163,14 @@ This project is a compact case study for IoT + edge AI instruction. The real eng
 - [ ] Dockerize the PC-side Python server.
 - [ ] Record a demo GIF and add it to the README.
 
+## Related Work
+
+- **[OmniForge-Data-Annotation](https://github.com/Alexander390370/OmniForge-Data-Annotation)** — full-modal data annotation
+- **[sd-forge-8gb-vram-setup](https://github.com/Alexander390370/sd-forge-8gb-vram-setup)** — Stable Diffusion on the same 8GB card
+- **[esp32-edge-ai-security](https://github.com/Alexander390370/esp32-edge-ai-security)** — edge AI on the hardware side
+- **[esp32-pwm-fan-controller](https://github.com/Alexander390370/esp32-pwm-fan-controller)** — hardware-side firmware
+
+
 ## License
 
 Distributed under the MIT License. See `LICENSE` for details.
