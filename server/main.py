@@ -1,24 +1,44 @@
 import paho.mqtt.client as mqtt
 import requests
-from config import PUSHPLUS_TOKEN, DANGER_DISTANCE
+
+import config
 
 # ================= 1. Global Config =================
-MQTT_BROKER      = "broker.emqx.io"
-MQTT_PORT        = 1883
-MQTT_TOPIC_DATA  = "home/alert/data"
-MQTT_TOPIC_CTRL  = "home/alert/control"
+# Optional keys are read with getattr so an existing config.py that only
+# defines PUSHPLUS_TOKEN and DANGER_DISTANCE keeps working unchanged.
+# See config.example.py for the full set of overridable values.
+MQTT_BROKER     = getattr(config, "MQTT_BROKER", "broker.emqx.io")
+MQTT_PORT       = getattr(config, "MQTT_PORT", 1883)
+MQTT_USERNAME   = getattr(config, "MQTT_USERNAME", "")
+MQTT_PASSWORD   = getattr(config, "MQTT_PASSWORD", "")
+MQTT_TOPIC_DATA = getattr(config, "MQTT_TOPIC_DATA", "home/alert/data")
+MQTT_TOPIC_CTRL = getattr(config, "MQTT_TOPIC_CTRL", "home/alert/control")
+
+PUSHPLUS_TOKEN  = config.PUSHPLUS_TOKEN
+DANGER_DISTANCE = config.DANGER_DISTANCE
+
+# PushPlus over HTTPS. The token must never travel in a cleartext query string.
+PUSHPLUS_URL    = getattr(config, "PUSHPLUS_URL", "https://www.pushplus.plus/send")
 
 # Local Ollama API (OpenAI-compatible endpoint)
-LOCAL_API_URL    = "http://localhost:11434/v1/chat/completions"
-MODEL_NAME       = "qwen2.5:1.5b"
+LOCAL_API_URL   = getattr(config, "LOCAL_API_URL",
+                          "http://localhost:11434/v1/chat/completions")
+MODEL_NAME      = getattr(config, "MODEL_NAME", "qwen2.5:1.5b")
+
+HTTP_TIMEOUT    = 5
 
 is_alarm_on = False
 
 # ================= 2. Push Notification =================
 def send_phone_alert(title, content):
+    """POST to PushPlus. Token goes in the JSON body, not the URL."""
     try:
-        url = f"http://www.pushplus.plus/send?token={PUSHPLUS_TOKEN}&title={title}&content={content}"
-        requests.get(url)
+        r = requests.post(
+            PUSHPLUS_URL,
+            json={"token": PUSHPLUS_TOKEN, "title": title, "content": content},
+            timeout=HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
         print(f"[Push] Sent WeChat notification: {title}")
     except Exception as e:
         print(f"[Push] Failed to send WeChat notification: {e}")
@@ -49,7 +69,7 @@ def get_ai_description(dist, status, light_status):
             "max_tokens": 15,
             "temperature": 0.3
         }
-        r = requests.post(LOCAL_API_URL, json=payload, timeout=5)
+        r = requests.post(LOCAL_API_URL, json=payload, timeout=HTTP_TIMEOUT)
         r.raise_for_status()
 
         ai_msg = r.json()["choices"][0]["message"]
@@ -59,7 +79,26 @@ def get_ai_description(dist, status, light_status):
     except Exception as e:
         print(f"[AI] Call failed: {e}")
 
-# ================= 5. MQTT Message Handler =================
+# ================= 5. MQTT Callbacks =================
+def on_connect(client, userdata, flags, rc):
+    """Subscribe here rather than once after connect().
+
+    paho reconnects on its own but does NOT re-subscribe by itself. Subscribing
+    only at startup means that after the first network blip the server silently
+    stops receiving data: no error, no log, just an alarm that never fires.
+    (Callback signatures follow paho-mqtt 1.6.1, which requirements.txt pins.)
+    """
+    if rc == 0:
+        client.subscribe(MQTT_TOPIC_DATA)
+        print(f"[MQTT] Connected to {MQTT_BROKER}:{MQTT_PORT}, "
+              f"subscribed to {MQTT_TOPIC_DATA}")
+    else:
+        print(f"[MQTT] Connection refused, rc={rc}")
+
+def on_disconnect(client, userdata, rc):
+    if rc != 0:
+        print(f"[MQTT] Unexpected disconnect (rc={rc}); paho will retry.")
+
 def on_message(client, userdata, msg):
     global is_alarm_on
     payload = msg.payload.decode()
@@ -97,8 +136,16 @@ def on_message(client, userdata, msg):
 # ================= 6. Entry Point =================
 if __name__ == "__main__":
     client = mqtt.Client()
-    client.on_message = on_message
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    client.subscribe(MQTT_TOPIC_DATA)
-    print("[System] MQTT + LLM + Push + TTS pipeline started. Waiting for ESP32 data...")
+    if MQTT_USERNAME:
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+
+    client.on_connect    = on_connect
+    client.on_disconnect = on_disconnect
+    client.on_message    = on_message
+
+    print("[System] MQTT + LLM + Push + TTS pipeline started. "
+          "Waiting for ESP32 data...")
+    # connect_async + loop_forever keeps retrying if the broker is not up yet
+    # (a plain connect() would raise and exit instead).
+    client.connect_async(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_forever()
